@@ -9,9 +9,11 @@ dependencies = [
     "asyncpg>=0.31.0",
     "fastapi[standard]>=0.133.1",
     "greenlet>=3.3.2",
+    "httpx>=0.28.1",
     "pandas>=3.0.1",
     "pgvector>=0.4.2",
     "pydantic-settings>=2.13.1",
     "sentence-transformers>=5.2.3",
     "sqlalchemy>=2.0.47",
+    "streamlit>=1.49.0",
 ]
