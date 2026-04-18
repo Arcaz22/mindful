@@ -12,7 +12,7 @@ class KnowledgeBase(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     embedding: Mapped[List[float]] = mapped_column(Vector(384), nullable=False)
-    metadata_info: Mapped[Optional[str]] = mapped_column(String(255))
+    metadata_info: Mapped[Optional[str]] = mapped_column(Text)
 
 class UserUsage(Base):
     __tablename__ = "user_usage"

@@ -7,7 +7,7 @@ class DigitalWellbeingException(AppError):
 
 
 class ChatLimitExceededException(DigitalWellbeingException):
-    def __init__(self, message: str = "Batas percobaan gratis (3x) telah tercapai."):
+    def __init__(self, message: str = "Batas percobaan gratis telah tercapai."):
         super().__init__(message=message, code="CHAT_LIMIT_EXCEEDED", status_code=429)
 
 

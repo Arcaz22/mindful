@@ -1,6 +1,5 @@
 from abc import ABC, abstractmethod
-
-from alembic.environment import List
+from typing import List
 from .entities import LLMChatResponse
 
 class LLMPort(ABC):

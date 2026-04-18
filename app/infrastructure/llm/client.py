@@ -1,27 +1,59 @@
-import httpx
 import re
 from datetime import datetime
-from typing import List
-from sentence_transformers import SentenceTransformer
+from typing import Any, List
+
+import httpx
+
 from app.domain.llm.exceptions import LLMProviderUnavailableException
-from app.domain.llm.ports import LLMPort
 from app.domain.llm.entities import LLMChatResponse
+from app.domain.llm.ports import LLMPort
+from app.infrastructure.embeddings.hf_embedding import HuggingFaceEmbedding
 
 class LLMClient(LLMPort):
-    def __init__(self, base_url: str = "http://localhost:11434", model_name: str = "gpt-oss:20b"):
+    def __init__(
+        self,
+        base_url: str = "http://localhost:11434",
+        model_name: str = "llama3.1:8b",
+        embedding_model_name: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        embedding_vector_size: int = 384,
+    ):
         self.base_url = base_url
         self.model_name = model_name
-        self.embed_model = SentenceTransformer("all-MiniLM-L6-v2")
+        self.embedding_vector_size = embedding_vector_size
+        self.embed_model = HuggingFaceEmbedding(embedding_model_name)
         self.timeout = httpx.Timeout(120.0, connect=10.0)
 
     def generate_embedding(self, text: str) -> List[float]:
-        embedding = self.embed_model.encode(text)
-        return embedding.tolist()
+        embedding = self.embed_model.generate_embedding(text)
+        if len(embedding) != self.embedding_vector_size:
+            raise ValueError(
+                f"Dimensi embedding tidak cocok. Expected={self.embedding_vector_size}, got={len(embedding)}"
+            )
+        return embedding
 
     def _clean_response(self, text: str) -> str:
         text = text.strip()
         text = re.sub(r'\n{3,}', '\n\n', text)
         return text
+
+    async def check_connection(self) -> dict[str, Any]:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=3.0)) as client:
+            try:
+                response = await client.get(f"{self.base_url}/api/tags")
+                response.raise_for_status()
+                data = response.json()
+                return {
+                    "ok": True,
+                    "base_url": self.base_url,
+                    "models": [model.get("name") for model in data.get("models", [])],
+                }
+            except Exception as exc:
+                return {
+                    "ok": False,
+                    "base_url": self.base_url,
+                    "models": [],
+                    "error": str(exc),
+                }
 
     async def ask(self, prompt: str, context: str) -> LLMChatResponse:
         full_prompt = f"""Anda adalah asisten psikologi digital yang empati dan grounded.

@@ -3,15 +3,20 @@ from typing import List
 
 class ChatRepositoryPort(ABC):
     @abstractmethod
-    async def get_user_status(self, user_id: str):
+    async def get_user_status(self, user_id: str, fingerprint: str = None):
         pass
 
     @abstractmethod
-    async def increment_usage(self, user_id: str):
+    async def increment_usage(self, user_id: str, fingerprint: str = None):
         pass
 
     @abstractmethod
-    async def search_knowledge(self, vector: List[float], limit: int = 3) -> str:
+    async def search_knowledge(
+        self,
+        vector: List[float],
+        limit: int = 3,
+        max_distance: float | None = None,
+    ) -> dict:
         pass
 
     @abstractmethod

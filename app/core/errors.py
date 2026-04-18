@@ -7,6 +7,9 @@ class AppError(Exception):
     status_code: int = 400
     detail: str | None = None
 
+    def __str__(self) -> str:
+        return self.detail or self.message or self.code
+
 
 class UnauthorizedError(AppError):
     def __init__(self, message: str = "Unauthorized", detail: str | None = None):

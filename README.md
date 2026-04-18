@@ -43,7 +43,7 @@ Tabel utama:
 - `knowledge_base`: menyimpan konten teks, embedding, dan metadata
 - `user_usage`: menyimpan identitas user, jumlah chat, whitelist, dan fingerprint
 
-Dataset awal berasal dari file [data.csv](/C:/Users/Lenovo/project/mindful/data.csv), lalu dimasukkan ke database melalui script ingest.
+Dataset lama masih tersedia di [data.csv](/home/w11c/project/portofolio/mindful/data.csv), tetapi pipeline ingest default sekarang memakai dataset terstruktur [data/anxiety_knowledge.csv](/home/w11c/project/portofolio/mindful/data/anxiety_knowledge.csv:1). Dataset ini dapat disusun ulang dari file sumber mentah di [data/raw_sources](/home/w11c/project/portofolio/mindful/data/raw_sources) menggunakan Ollama.
 
 ## Prasyarat
 
@@ -54,7 +54,7 @@ Pastikan tersedia:
 - Docker Desktop
 - Ollama lokal
 
-Model default pada client saat ini adalah `gpt-oss:20b`, dan embedding model yang dipakai adalah `all-MiniLM-L6-v2`.
+Model default pada client saat ini adalah `llama3.1:8b`, dan embedding model default yang dipakai adalah `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`.
 
 ## Environment Variable
 
@@ -64,15 +64,64 @@ Buat file `.env` di root project. Minimal isi yang dibutuhkan:
 APP_ENV=local
 LOG_LEVEL=INFO
 DATABASE_URL=postgresql+asyncpg://postgres:password@localhost:5432/mindful_db
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=llama3.1:8b
+EMBEDDING_MODEL_NAME=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+EMBEDDING_VECTOR_SIZE=384
+KNOWLEDGE_CSV_PATH=data/anxiety_knowledge.csv
+RAW_SOURCE_DIR=data/raw_sources
 MAX_FREE_CHAT_LIMIT=3
-ALLOWED_MODELS=["gpt-oss:20b"]
+RETRIEVAL_TOP_K=3
+ALLOWED_MODELS=llama3.1:8b
 SUPER_USERS=["admin"]
 ```
 
 Catatan:
 
 - `DATABASE_URL` harus sesuai dengan database yang dijalankan lewat Docker.
-- `MAX_FREE_CHAT_LIMIT` saat ini ada di konfigurasi, tetapi implementasi use case masih memakai batas `3` secara langsung.
+- `OLLAMA_BASE_URL` adalah alamat server Ollama yang dipanggil backend.
+- `EMBEDDING_MODEL_NAME` adalah model `sentence-transformers` yang dipakai untuk retrieval.
+- `EMBEDDING_VECTOR_SIZE` harus cocok dengan dimensi kolom vector di database.
+- `KNOWLEDGE_CSV_PATH` adalah file CSV terstruktur yang dipakai script ingest.
+- `RAW_SOURCE_DIR` adalah folder file sumber mentah hasil ekstraksi halaman web.
+- `MAX_FREE_CHAT_LIMIT` dipakai untuk membatasi kuota chat gratis per user.
+- `RETRIEVAL_TOP_K` mengatur jumlah chunk knowledge base yang diambil saat retrieval.
+- `RETRIEVAL_MAX_DISTANCE` opsional untuk memfilter hasil retrieval yang terlalu jauh; kosongkan untuk menonaktifkan threshold.
+
+### Jika Backend di WSL dan Ollama di Windows
+
+Jika backend berjalan di WSL tetapi Ollama berjalan di Windows, jangan gunakan `http://localhost:11434` kecuali forwarding `localhost` di mesin Anda memang aktif.
+
+Langkah yang aman:
+
+1. Pastikan Ollama di Windows berjalan dan port `11434` terbuka.
+2. Di WSL, cari IP host Windows:
+
+```bash
+cat /etc/resolv.conf
+```
+
+Biasanya nilai `nameserver` adalah IP Windows host, misalnya `10.x.x.x`.
+
+3. Uji koneksi dari WSL:
+
+```bash
+curl http://IP_WINDOWS:11434/api/tags
+```
+
+4. Jika berhasil, set `.env` backend menjadi:
+
+```env
+OLLAMA_BASE_URL=http://IP_WINDOWS:11434
+```
+
+5. Restart backend FastAPI.
+
+Jika `curl` gagal, biasanya penyebabnya salah satu dari berikut:
+
+- Ollama belum berjalan di Windows
+- firewall Windows masih memblokir port `11434`
+- Ollama hanya bind ke `127.0.0.1` dan belum bisa diakses dari WSL
 
 ## Menjalankan Database
 
@@ -98,7 +147,20 @@ uv run alembic upgrade head
 
 ## Ingest Dataset
 
-Setelah database siap, masukkan data awal dari `data.csv`:
+Setelah database siap, buat atau perbarui dataset CSV terstruktur dari sumber mentah:
+
+```powershell
+uv run python scripts/prepare_dataset.py
+```
+
+Script ini akan:
+
+- membaca file `.md` di `RAW_SOURCE_DIR`
+- memecah isi per section
+- meminta Ollama merangkum tiap section menjadi chunk terstruktur
+- menulis hasil akhir ke `KNOWLEDGE_CSV_PATH`
+
+Setelah itu, masukkan data awal ke database:
 
 ```powershell
 uv run python scripts/ingest.py
@@ -107,9 +169,10 @@ uv run python scripts/ingest.py
 Script ini akan:
 
 - membersihkan data lama di tabel `knowledge_base`
-- membaca setiap baris dari `data.csv`
+- membaca setiap baris dari file pada `KNOWLEDGE_CSV_PATH`
+- memvalidasi kolom dataset dan menghindari duplikasi sederhana
 - membuat embedding
-- menyimpan hasilnya ke database
+- menyimpan hasilnya ke database beserta metadata sumber
 
 ## Menjalankan Backend FastAPI
 
@@ -177,4 +240,5 @@ Urutan paling aman:
 
 - `README` ini menjelaskan implementasi saat ini, yang masih berfokus pada domain psikologi/digital wellbeing.
 - Jika domain diubah ke medis, sumber data dan guardrail perlu diperketat karena risikonya lebih tinggi.
+- Guardrail dasar untuk self-harm/krisis sudah ada, tetapi masih berbasis rule sederhana dan belum setara moderation pipeline penuh.
 - Frontend `Streamlit` saat ini adalah UI tipis untuk menguji backend, belum memuat autentikasi atau manajemen sesi yang kompleks.

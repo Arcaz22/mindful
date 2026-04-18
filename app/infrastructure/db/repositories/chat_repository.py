@@ -51,12 +51,24 @@ class ChatRepository(ChatRepositoryPort):
         await self.session.refresh(usage)
         return usage
 
-    async def search_knowledge(self, vector: List[float], limit: int = 3) -> dict:
+    async def search_knowledge(
+        self,
+        vector: List[float],
+        limit: int = 3,
+        max_distance: float | None = None,
+    ) -> dict:
+        distance_expr = KnowledgeBase.embedding.l2_distance(vector)
         stmt = (
-            select(KnowledgeBase.id, KnowledgeBase.content)
-            .order_by(KnowledgeBase.embedding.l2_distance(vector))
+            select(
+                KnowledgeBase.id,
+                KnowledgeBase.content,
+                distance_expr.label("distance"),
+            )
+            .order_by(distance_expr)
             .limit(limit)
         )
+        if max_distance is not None:
+            stmt = stmt.where(distance_expr <= max_distance)
 
         result = await self.session.execute(stmt)
         rows = result.all()

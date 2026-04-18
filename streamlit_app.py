@@ -1,3 +1,4 @@
+import hashlib
 import uuid
 
 import httpx
@@ -11,6 +12,28 @@ st.set_page_config(
 )
 
 
+def build_client_identity() -> tuple[str, str, str]:
+    headers = st.context.headers
+    forwarded_for = headers.get("X-Forwarded-For", "")
+    forwarded_ip = forwarded_for.split(",")[0].strip() if forwarded_for else ""
+    ip_address = st.context.ip_address or forwarded_ip or headers.get("X-Real-Ip", "")
+    user_agent = headers.get("User-Agent", "")
+    accept_language = headers.get("Accept-Language", "")
+
+    raw_identity = "|".join(
+        part for part in (ip_address, user_agent, accept_language) if part
+    )
+    if not raw_identity:
+        raw_identity = st.session_state.get("anonymous_identity_seed", str(uuid.uuid4()))
+        st.session_state.anonymous_identity_seed = raw_identity
+
+    identity_hash = hashlib.sha256(raw_identity.encode("utf-8")).hexdigest()
+    user_id = f"user-{identity_hash[:12]}"
+    visitor_id = f"visitor-{identity_hash[:16]}"
+    identity_source = ip_address or "anonymous-session"
+    return user_id, visitor_id, identity_source
+
+
 def init_state() -> None:
     if "messages" not in st.session_state:
         st.session_state.messages = [
@@ -22,10 +45,10 @@ def init_state() -> None:
                 ),
             }
         ]
-    if "user_id" not in st.session_state:
-        st.session_state.user_id = "guest-user"
-    if "visitor_id" not in st.session_state:
-        st.session_state.visitor_id = str(uuid.uuid4())
+    user_id, visitor_id, identity_source = build_client_identity()
+    st.session_state.user_id = user_id
+    st.session_state.visitor_id = visitor_id
+    st.session_state.identity_source = identity_source
     if "last_meta" not in st.session_state:
         st.session_state.last_meta = None
 
@@ -41,22 +64,24 @@ def render_sidebar() -> str:
             help="Alamat backend FastAPI yang menjalankan endpoint /chat.",
         ).rstrip("/")
 
-        st.session_state.user_id = st.text_input(
-            "User ID",
-            value=st.session_state.user_id,
-        ).strip() or "guest-user"
-        st.session_state.visitor_id = st.text_input(
-            "Visitor ID",
-            value=st.session_state.visitor_id,
-        ).strip() or st.session_state.visitor_id
+        st.markdown("**Identitas Pengguna**")
+        st.caption("Dibuat otomatis dari IP/header request dan hanya ditampilkan sebagai info.")
+        st.text(f"User ID: {st.session_state.user_id}")
+        st.text(f"Visitor ID: {st.session_state.visitor_id}")
+        st.caption(f"Sumber identitas: {st.session_state.identity_source}")
 
         if st.button("Reset Chat", use_container_width=True):
             preserved_user = st.session_state.user_id
             preserved_visitor = st.session_state.visitor_id
+            preserved_source = st.session_state.identity_source
+            preserved_seed = st.session_state.get("anonymous_identity_seed")
             st.session_state.clear()
             init_state()
             st.session_state.user_id = preserved_user
             st.session_state.visitor_id = preserved_visitor
+            st.session_state.identity_source = preserved_source
+            if preserved_seed:
+                st.session_state.anonymous_identity_seed = preserved_seed
             st.rerun()
 
         st.divider()
