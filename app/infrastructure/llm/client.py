@@ -3,10 +3,16 @@ from datetime import datetime
 from typing import Any, List
 
 import httpx
+from langchain_ollama import ChatOllama
+from pydantic import ValidationError
 
-from app.domain.llm.exceptions import LLMProviderUnavailableException
+from app.domain.llm.exceptions import (
+    LLMOutputValidationException,
+    LLMProviderUnavailableException,
+)
 from app.domain.llm.entities import LLMChatResponse
 from app.domain.llm.ports import LLMPort
+from app.infrastructure.ai.medical_response import MedicalResponse
 from app.infrastructure.embeddings.hf_embedding import HuggingFaceEmbedding
 
 class LLMClient(LLMPort):
@@ -22,6 +28,16 @@ class LLMClient(LLMPort):
         self.embedding_vector_size = embedding_vector_size
         self.embed_model = HuggingFaceEmbedding(embedding_model_name)
         self.timeout = httpx.Timeout(120.0, connect=10.0)
+        self.chat_model = ChatOllama(
+            base_url=self.base_url,
+            model=self.model_name,
+            temperature=0.3,
+            top_p=0.9,
+            client_kwargs={"timeout": 120.0},
+        )
+        self.structured_chat_model = self.chat_model.with_structured_output(
+            MedicalResponse
+        )
 
     def generate_embedding(self, text: str) -> List[float]:
         embedding = self.embed_model.generate_embedding(text)
@@ -56,13 +72,16 @@ class LLMClient(LLMPort):
                 }
 
     async def ask(self, prompt: str, context: str) -> LLMChatResponse:
-        full_prompt = f"""Anda adalah asisten psikologi digital yang empati dan grounded.
+        full_prompt = f"""Anda adalah asisten informasi kesehatan digital yang empati dan grounded.
 Gunakan KONTEKS berikut untuk menjawab pertanyaan USER.
 
 ATURAN:
 1. Jawab berdasarkan KONTEKS yang diberikan.
-2. Jika jawaban tidak ada di KONTEKS, katakan bahwa Anda tidak memiliki informasi spesifik di database, namun berikan saran umum yang bijak sebagai asisten psikologi.
-3. Jangan pernah mengarang data medis atau nama orang jika tidak ada di konteks.
+2. Jika jawaban tidak ada di KONTEKS, nyatakan bahwa informasi tidak ditemukan.
+3. Jangan pernah mengarang data medis, nama orang, atau URL sumber.
+4. Sertakan setidaknya satu URL HTTPS yang benar-benar ada di KONTEKS.
+5. Jangan mendiagnosis, meresepkan obat, memberikan dosis personal, atau menyarankan penghentian obat.
+6. Untuk kondisi berisiko, isi red_flags dan arahkan pengguna ke tenaga kesehatan atau layanan darurat.
 
 KONTEKS:
 {context}
@@ -70,35 +89,25 @@ KONTEKS:
 PERTANYAAN USER:
 {prompt}
 
-JAWABAN:"""
+JAWABAN HARUS MENGIKUTI SCHEMA STRUCTURED OUTPUT."""
 
-        payload = {
-            "model": self.model_name,
-            "prompt": full_prompt,
-            "stream": False,
-            "options": {
-                "temperature": 0.3,
-                "top_p": 0.9
-            }
-        }
+        try:
+            response = await self.structured_chat_model.ainvoke(full_prompt)
+            if not isinstance(response, MedicalResponse):
+                response = MedicalResponse.model_validate(response)
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            try:
-                response = await client.post(f"{self.base_url}/api/generate", json=payload)
-                response.raise_for_status()
-                data = response.json()
-
-                raw_content = data['response']
-                clean_content = self._clean_response(raw_content)
-
-                return LLMChatResponse(
-                    content=clean_content,
-                    model_name=self.model_name,
-                    usage_count=0,
-                    timestamp=datetime.now(),
-                    source_context=context
-                )
-            except httpx.ReadTimeout:
-                raise LLMProviderUnavailableException("Ollama terlalu lama merespon.")
-            except Exception as e:
-                raise LLMProviderUnavailableException(f"Koneksi Ollama bermasalah: {str(e)}")
+            return LLMChatResponse(
+                content=self._clean_response(response.to_text()),
+                model_name=self.model_name,
+                usage_count=0,
+                timestamp=datetime.now(),
+                source_context=context,
+            )
+        except (TimeoutError, httpx.TimeoutException):
+            raise LLMProviderUnavailableException("Ollama terlalu lama merespon.")
+        except (ValidationError, ValueError, TypeError) as exc:
+            raise LLMOutputValidationException(str(exc)) from exc
+        except Exception as exc:
+            raise LLMProviderUnavailableException(
+                f"Koneksi Ollama bermasalah: {str(exc)}"
+            ) from exc

@@ -14,3 +14,8 @@ class ChatLimitExceededException(DigitalWellbeingException):
 class LLMProviderUnavailableException(DigitalWellbeingException):
     def __init__(self, message: str = "Layanan AI sedang tidak tersedia, silakan coba lagi nanti."):
         super().__init__(message=message, code="LLM_UNAVAILABLE", status_code=503)
+
+
+class LLMOutputValidationException(DigitalWellbeingException):
+    def __init__(self, message: str = "Jawaban AI tidak memenuhi format keamanan yang ditetapkan."):
+        super().__init__(message=message, code="LLM_OUTPUT_INVALID", status_code=502)
