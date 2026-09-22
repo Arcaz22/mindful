@@ -15,6 +15,18 @@ class Settings(BaseSettings):
     RAW_SOURCE_DIR: str = "data/raw_sources"
     RETRIEVAL_TOP_K: int = 3
     RETRIEVAL_MAX_DISTANCE: float | None = None
+    TAVILY_API_KEY: str | None = None
+    TAVILY_MAX_RESULTS: int = 5
+    TAVILY_SEARCH_DEPTH: str = "advanced"
+    TAVILY_TIMEOUT_SECONDS: float = 20.0
+    TRUSTED_SOURCE_DOMAINS: list[str] = [
+        "who.int",
+        "nhs.uk",
+        "mayoclinic.org",
+        "nimh.nih.gov",
+        "kemkes.go.id",
+    ]
+    REQUIRE_SOURCE_APPROVAL: bool = True
 
     MAX_FREE_CHAT_LIMIT: int
     ALLOWED_MODELS: str
