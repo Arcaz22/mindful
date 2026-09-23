@@ -1,3 +1,4 @@
+import hashlib
 import re
 from datetime import datetime, timezone
 from urllib.parse import urlparse
@@ -7,6 +8,11 @@ from pydantic import AnyHttpUrl, BaseModel, Field, field_validator
 
 class SourcePolicyViolation(ValueError):
     """Raised when a web source cannot be trusted for downstream processing."""
+
+
+def content_fingerprint(content: str) -> str:
+    normalized = " ".join(content.split()).casefold()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 class SourceCandidate(BaseModel):

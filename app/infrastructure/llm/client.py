@@ -1,6 +1,6 @@
 import re
 from datetime import datetime
-from typing import Any, List
+from typing import Any
 
 import httpx
 from langchain_ollama import ChatOllama
@@ -13,20 +13,14 @@ from app.domain.llm.exceptions import (
 from app.domain.llm.entities import LLMChatResponse
 from app.domain.llm.ports import LLMPort
 from app.infrastructure.ai.medical_response import MedicalResponse
-from app.infrastructure.embeddings.hf_embedding import HuggingFaceEmbedding
-
 class LLMClient(LLMPort):
     def __init__(
         self,
         base_url: str = "http://localhost:11434",
         model_name: str = "llama3.1:8b",
-        embedding_model_name: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
-        embedding_vector_size: int = 384,
     ):
         self.base_url = base_url
         self.model_name = model_name
-        self.embedding_vector_size = embedding_vector_size
-        self.embed_model = HuggingFaceEmbedding(embedding_model_name)
         self.timeout = httpx.Timeout(120.0, connect=10.0)
         self.chat_model = ChatOllama(
             base_url=self.base_url,
@@ -38,14 +32,6 @@ class LLMClient(LLMPort):
         self.structured_chat_model = self.chat_model.with_structured_output(
             MedicalResponse
         )
-
-    def generate_embedding(self, text: str) -> List[float]:
-        embedding = self.embed_model.generate_embedding(text)
-        if len(embedding) != self.embedding_vector_size:
-            raise ValueError(
-                f"Dimensi embedding tidak cocok. Expected={self.embedding_vector_size}, got={len(embedding)}"
-            )
-        return embedding
 
     def _clean_response(self, text: str) -> str:
         text = text.strip()

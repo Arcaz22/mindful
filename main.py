@@ -14,7 +14,7 @@ def create_app() -> FastAPI:
     configure_logging(settings)
 
     app = FastAPI(
-        title="FM Boilerplate",
+        title="Mindful",
         version="0.1.0",
     )
 

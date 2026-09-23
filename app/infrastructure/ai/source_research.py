@@ -29,8 +29,6 @@ class TavilySourceResearch:
         search_client: Any | None = None,
     ):
         api_key = api_key.strip() if api_key else None
-        if not api_key and search_client is None:
-            raise ValueError("TAVILY_API_KEY wajib diisi untuk source research")
         if max_results < 1 or max_results > 20:
             raise ValueError("TAVILY_MAX_RESULTS harus berada di antara 1 dan 20")
         if timeout_seconds <= 0:
@@ -41,14 +39,16 @@ class TavilySourceResearch:
         self.policy = SourcePolicy(trusted_domains)
         self.max_results = max_results
         self.timeout_seconds = timeout_seconds
-        self.search_client = search_client if search_client is not None else TavilySearch(
-            api_wrapper=TavilySearchAPIWrapper(tavily_api_key=api_key),
-            max_results=max_results,
-            search_depth=search_depth,
-            include_domains=sorted(self.policy.trusted_domains),
-            include_raw_content="markdown",
-            topic="general",
-        )
+        self.search_client = search_client
+        if self.search_client is None and api_key:
+            self.search_client = TavilySearch(
+                api_wrapper=TavilySearchAPIWrapper(tavily_api_key=api_key),
+                max_results=max_results,
+                search_depth=search_depth,
+                include_domains=sorted(self.policy.trusted_domains),
+                include_raw_content="markdown",
+                topic="general",
+            )
 
     async def search(self, query: str) -> list[SourceCandidate]:
         query = query.strip()
@@ -56,6 +56,10 @@ class TavilySourceResearch:
             raise ValueError("Query pencarian tidak boleh kosong")
         if len(query) > 500:
             raise ValueError("Query pencarian terlalu panjang")
+        if self.search_client is None:
+            raise TavilySearchError(
+                "TAVILY_API_KEY belum dikonfigurasi", kind="authentication"
+            )
 
         try:
             raw_result = await asyncio.wait_for(

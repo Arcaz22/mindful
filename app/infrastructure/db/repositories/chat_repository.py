@@ -1,10 +1,10 @@
 from datetime import datetime
-from typing import List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.domain.chat.chat_repository_port import ChatRepositoryPort
-from app.infrastructure.db.models import UserUsage, KnowledgeBase
+from app.infrastructure.ai.source_policy import content_fingerprint
+from app.infrastructure.db.models import SourceSearchCache, UserUsage
 
 class ChatRepository(ChatRepositoryPort):
     def __init__(self, session: AsyncSession):
@@ -51,39 +51,17 @@ class ChatRepository(ChatRepositoryPort):
         await self.session.refresh(usage)
         return usage
 
-    async def search_knowledge(
-        self,
-        vector: List[float],
-        limit: int = 3,
-        max_distance: float | None = None,
-    ) -> dict:
-        distance_expr = KnowledgeBase.embedding.l2_distance(vector)
-        stmt = (
-            select(
-                KnowledgeBase.id,
-                KnowledgeBase.content,
-                distance_expr.label("distance"),
+    async def save_source_audit(self, query: str, candidates: list, response_id: str) -> None:
+        for candidate in candidates:
+            self.session.add(
+                SourceSearchCache(
+                    query=query,
+                    source_url=str(candidate.url),
+                    source_title=candidate.title,
+                    source_domain=candidate.domain,
+                    retrieved_at=candidate.retrieved_at,
+                    content_hash=content_fingerprint(candidate.content),
+                    response_id=response_id,
+                )
             )
-            .order_by(distance_expr)
-            .limit(limit)
-        )
-        if max_distance is not None:
-            stmt = stmt.where(distance_expr <= max_distance)
-
-        result = await self.session.execute(stmt)
-        rows = result.all()
-        ids = [row[0] for row in rows]
-        chunks = [row[1] for row in rows]
-
-        return {
-            "context": "\n---\n".join(chunks) if chunks else "",
-            "ids": ids
-        }
-
-    async def save_knowledge(self, content: str, embedding: list, metadata: str = None, fingerprint: str = None):
-        new_data = KnowledgeBase(
-            content=content,
-            embedding=embedding,
-            metadata_info=metadata
-        )
-        self.session.add(new_data)
+        await self.session.commit()

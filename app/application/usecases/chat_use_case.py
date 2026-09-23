@@ -1,7 +1,14 @@
+import logging
 import re
+from uuid import uuid4
 
 from app.domain.llm.exceptions import ChatLimitExceededException
 from app.domain.chat.chat_repository_port import ChatRepositoryPort
+from app.infrastructure.ai.medical_guardrail import MedicalRedFlagGuardrail
+from app.infrastructure.ai.source_research import TavilySearchError, TavilySourceResearch
+
+
+logger = logging.getLogger(__name__)
 
 
 class ChatUsecase:
@@ -21,14 +28,14 @@ class ChatUsecase:
         repo: ChatRepositoryPort,
         llm,
         max_free_chat_limit: int = 3,
-        retrieval_top_k: int = 3,
-        retrieval_max_distance: float | None = None,
+        source_research: TavilySourceResearch | None = None,
+        medical_guardrail: MedicalRedFlagGuardrail | None = None,
     ):
         self.repo = repo
         self.llm = llm
         self.max_free_chat_limit = max_free_chat_limit
-        self.retrieval_top_k = retrieval_top_k
-        self.retrieval_max_distance = retrieval_max_distance
+        self.source_research = source_research
+        self.medical_guardrail = medical_guardrail or MedicalRedFlagGuardrail()
 
     def _is_high_risk_message(self, message: str) -> bool:
         return bool(self.CRISIS_PATTERN.search(message))
@@ -52,6 +59,46 @@ class ChatUsecase:
             "context_ids": [],
         }
 
+    def _build_medical_guardrail_response(
+        self, remaining_chats: int, assessment
+    ) -> dict:
+        urgency = "Ini dapat merupakan keadaan darurat. " if assessment.requires_immediate_help else ""
+        return {
+            "answer": (
+                f"{urgency}{assessment.recommended_action} "
+                "Saya tidak akan memberikan rekomendasi obat personal melalui chat."
+            ),
+            "model_used": "medical-guardrail",
+            "remaining_chats": remaining_chats,
+            "context_ids": [],
+        }
+
+    def _build_source_fallback(self, remaining_chats: int) -> dict:
+        return {
+            "answer": (
+                "Maaf, sumber kesehatan tepercaya tidak tersedia saat ini. "
+                "Silakan coba lagi nanti atau konsultasikan pertanyaan Anda kepada dokter atau apoteker."
+            ),
+            "model_used": "tavily-fallback",
+            "remaining_chats": remaining_chats,
+            "context_ids": [],
+        }
+
+    @staticmethod
+    def _build_source_context(candidates) -> str:
+        return "\n\n---\n\n".join(
+            "\n".join(
+                [
+                    f"SUMBER {index}: {candidate.title}",
+                    f"URL: {candidate.url}",
+                    f"DOMAIN: {candidate.domain}",
+                    f"DIAMBIL: {candidate.retrieved_at.isoformat()}",
+                    f"ISI:\n{candidate.content}",
+                ]
+            )
+            for index, candidate in enumerate(candidates, start=1)
+        )
+
     async def execute(self, user_id: str, message: str, fingerprint: str = None):
         user = await self.repo.get_user_status(user_id, fingerprint=fingerprint)
         if not user.is_whitelisted and user.chat_count >= self.max_free_chat_limit:
@@ -64,27 +111,42 @@ class ChatUsecase:
                 remaining_chats=self._remaining_chats(user.chat_count, user.is_whitelisted)
             )
 
-        query_vector = self.llm.generate_embedding(message)
-        result = await self.repo.search_knowledge(
-            query_vector,
-            limit=self.retrieval_top_k,
-            max_distance=self.retrieval_max_distance,
-        )
-        context = result["context"]
-        context_ids = result["ids"]
+        assessment = self.medical_guardrail.assess(message)
+        if assessment.triggered:
+            return self._build_medical_guardrail_response(
+                remaining_chats=self._remaining_chats(user.chat_count, user.is_whitelisted),
+                assessment=assessment,
+            )
+
         updated_user = await self.repo.increment_usage(user_id, fingerprint=fingerprint)
 
-        if not context:
-            return {
-                "answer": "Maaf, data tidak ditemukan di database.",
-                "model_used": "-",
-                "remaining_chats": self._remaining_chats(
-                    updated_user.chat_count, updated_user.is_whitelisted
-                ),
-                "context_ids": []
-            }
+        if self.source_research is None:
+            return self._build_source_fallback(
+                self._remaining_chats(updated_user.chat_count, updated_user.is_whitelisted)
+            )
+
+        try:
+            candidates = await self.source_research.search(message)
+        except (TavilySearchError, ValueError):
+            return self._build_source_fallback(
+                self._remaining_chats(updated_user.chat_count, updated_user.is_whitelisted)
+            )
+
+        if not candidates:
+            return self._build_source_fallback(
+                self._remaining_chats(updated_user.chat_count, updated_user.is_whitelisted)
+            )
+
+        context = self._build_source_context(candidates)
 
         ai_response = await self.llm.ask(message, context)
+        audit_method = getattr(self.repo, "save_source_audit", None)
+        if audit_method is not None:
+            try:
+                await audit_method(message, candidates, str(uuid4()))
+            except Exception:
+                # Audit/cache persistence is optional and must not break chat.
+                logger.warning("Gagal menyimpan audit sumber web", exc_info=True)
 
         return {
             "answer": ai_response.content,
@@ -92,5 +154,5 @@ class ChatUsecase:
             "remaining_chats": self._remaining_chats(
                 updated_user.chat_count, updated_user.is_whitelisted
             ),
-            "context_ids": context_ids
+            "context_ids": []
         }
